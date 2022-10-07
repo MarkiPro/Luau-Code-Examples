@@ -1,0 +1,170 @@
+local TS = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Terrain = workspace.Terrain
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local Update = Remotes:WaitForChild("UpdateServer")
+
+local Properties = require(script:WaitForChild("Properties")) --// requiring the module with atmosphere properties
+local Data = require(script:WaitForChild("WeatherData")) --// requiring the module with main properties
+
+local IsDay = script:WaitForChild("Values"):WaitForChild("IsDay")
+
+local RND = Random.new()
+
+local DynamicWeather = {}
+DynamicWeather.__index = DynamicWeather
+
+local Modules = {
+	Rain = require(script:WaitForChild("RainModule")); --// rain module
+	Snow = require(script:WaitForChild("SnowModule")); --// snow module
+	Lightning = require(script:WaitForChild("LightningModule")); --// lightning module
+}
+
+function DynamicWeather:AdjustCycleLighting()
+	local Weather = (self.Raining) and "Rainy" or (self.Snowing) and "Snowy" or "Clear"
+	local TimeState = (IsDay.Value) and "Day" or "Night"
+	local Atmosphere = Weather..TimeState
+	
+	self:LoadLighting("Lighting", Atmosphere)
+	self:LoadLighting("Atmosphere", Atmosphere)
+	self:LoadLighting("Clouds", Atmosphere)
+end
+
+function DynamicWeather:init()
+	if Data["DayCycle"] then
+		self:SetCycle()
+	end
+	
+	IsDay:GetPropertyChangedSignal("Value"):Connect(function()
+		self:AdjustCycleLighting()
+	end)
+	
+	self:AdjustCycleLighting()
+end
+
+function DynamicWeather.new()
+	local MT = setmetatable({
+		Atmosphere = Lighting:WaitForChild("Atmosphere"); --// atmosphere object
+		Clouds = Terrain:WaitForChild("Clouds"); --// clouds object
+		Lighting = Lighting; --// lighting service
+
+		Raining = false; --// whether it's raining at the moment
+		Snowing = false; --// whether it's snowing at the moment
+		
+		LightningColors = {Rain = Color3.fromRGB(255, 112, 112), Snow = Color3.fromRGB(151, 110, 255), Clear = Color3.fromRGB(255, 250, 89)} --// lightning colors during different atmospheric states
+	}, DynamicWeather)
+	
+	MT:init()
+	return MT
+end
+
+local function ReturnTime(Range)
+	local Value = 0
+	
+	if Range.Min == Range.Max then
+		Value = Range.Min
+	else
+		Value = RND:NextNumber(Range.Min, Range.Max)
+	end
+	
+	return Value
+end
+
+function DynamicWeather:LoadLighting(TName, Atmosphere)
+	local TweenGoal = {}
+	
+	for Property, Value in pairs(Properties[TName][Atmosphere]) do
+		if typeof(Value) == "NumberRange" then
+			Value = ReturnTime(Value)
+		end
+		TweenGoal[Property] = Value
+	end
+	
+	local Tween = TS:Create(
+		self[TName],
+		TweenInfo.new(
+			ReturnTime(Data[Atmosphere]), --// selected time for the tween
+			Enum.EasingStyle.Linear --// easing style for tween
+		),
+		TweenGoal
+	)
+	
+	Tween:Play()
+	return Tween
+end
+
+function DynamicWeather:SetCycleTime()
+	self.Increment = (Data["Increment"] < 0.01) and 0.01 or Data["Increment"]
+	self.Time = Data["DayLength"] * self.Increment
+end
+
+function DynamicWeather:SetCycle()
+	self:SetCycleTime()
+	
+	coroutine.wrap(function()
+		while Data["DayCycle"] do
+			Lighting.ClockTime += self.Increment
+			IsDay.Value = (Lighting.ClockTime >= 6 and Lighting.ClockTime <= 17.9) and true or false;
+			task.wait(self.Time)
+		end
+	end)()
+end
+
+function DynamicWeather:ToggleCycle(Enabled)
+	Data["DayCycle"] = Enabled
+	if Enabled then self:SetCycle() end
+end
+
+function DynamicWeather:PreSetCycle(ClockTime)
+	Lighting.ClockTime = ClockTime
+end
+
+function DynamicWeather:PrepareStorm(Weather)
+	local TimeState = (IsDay.Value) and "Day" or "Night"
+	local Atmosphere = Weather..TimeState
+	
+	local TweenA = self:LoadLighting("Atmosphere", Atmosphere)
+	TweenA.Completed:Wait()
+	
+	local TweenC = self:LoadLighting("Clouds", Atmosphere)
+	
+	local TweenL = self:LoadLighting("Lighting", Atmosphere)
+	TweenL.Completed:Wait()
+end
+
+function DynamicWeather:StartPrecipitation(LastTime, Precipitation)
+	local FirstTime = os.clock()
+
+	local TweenIn = TweenInfo.new(ReturnTime(Data["Tween"..Precipitation.."Time"]), Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	local TweenOut = TweenInfo.new(ReturnTime(Data["Tween"..Precipitation.."Time"]), Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	
+	Modules[Precipitation]:Enable(TweenIn)
+
+	coroutine.wrap(function()
+		while self[Precipitation.."ing"] do
+			if (os.clock() - FirstTime) >= LastTime then
+				self:StopPrecipitation(Precipitation, TweenOut)
+				break
+			end
+			task.wait()
+		end
+	end)()
+end
+
+function DynamicWeather:StopPrecipitation(Precipitation, TweenOut)
+	self[Precipitation.."ing"] = false
+	Modules[Precipitation]:Disable(TweenOut)
+	Update:FireServer(Precipitation)
+end
+
+function DynamicWeather:StrikeLightning(SelectedPosition)
+	local Weather = (self.Raining) and "Rain" or (self.Snowing) and "Snow" or "Clear"
+	
+	Modules["Lightning"]:Strike(SelectedPosition, 1000, self.LightningColors[Weather])
+end
+
+return DynamicWeather

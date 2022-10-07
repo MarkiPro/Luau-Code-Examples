@@ -1,0 +1,212 @@
+local FeedModule = {}
+FeedModule.__index = FeedModule
+
+local Messages = require(game:GetService("ReplicatedStorage"):WaitForChild("Modules"):WaitForChild("Messages"))
+
+local KillMessages = Messages["KillMessages"]
+local DeathMessages = Messages["DeathMessages"]
+
+local DominationMessages = Messages["DominationMessages"]
+local RevengeMessages = Messages["RevengeMessages"]
+
+local function init(self)
+	self.Camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+		self.ViewportSize = self.Camera.ViewportSize
+		local StandardLabelSize = (self.ViewportSize.X + self.ViewportSize.Y)/75
+		
+		self.OGFeedLabel.TextSize = StandardLabelSize
+		
+		for _, Label in ipairs(self.FeedHolder:GetChildren()) do
+			if Label:IsA("TextLabel") then
+				Label.TextSize = StandardLabelSize
+			end
+		end
+	end)
+end
+
+function FeedModule.new()
+	local self = {}
+	
+	self.Player = game:GetService("Players").LocalPlayer
+	
+	self.OGFeedLabel = script:WaitForChild("FeedLabel")
+	self.FeedHolder = script.Parent:WaitForChild("FeedHolder")
+	
+	self.Minimap = script.Parent.Parent:WaitForChild("Minimap"):WaitForChild("Minimap")
+	
+	self.Camera = workspace.CurrentCamera
+	self.ViewportSize = self.Camera.ViewportSize
+	
+	local StandardLabelSize = (self.ViewportSize.X + self.ViewportSize.Y)/75
+
+	self.OGFeedLabel.TextSize = StandardLabelSize
+	
+	self.Labels = 0
+	
+	init(self)
+	return setmetatable(self, FeedModule)
+end
+
+function FeedModule:PromptKillMessage(Killer, Victim)
+	local KillMessage = KillMessages[math.random(#KillMessages)]
+	
+	local NewLabel = self.OGFeedLabel:Clone()
+	
+	if self.Player == Killer then
+		NewLabel.Text = "<b>You</b> "..KillMessage.." <font color='rgb(145, 0, 0)'>"..Victim.Name.."</font>"
+	elseif self.Player == Victim then
+		NewLabel.Text = "<font color='rgb(145, 0, 0)'>"..Killer.Name.."</font> "..KillMessage.." <b>you</b>"
+	else
+		NewLabel.Text = "<font color='rgb(145, 0, 0)'>"..Killer.Name.."</font> "..KillMessage.." <font color='rgb(145, 0, 0)'>"..Victim.Name.."</font>"
+	end
+	
+	NewLabel.Parent = self.FeedHolder
+	
+	self.Labels += 1
+	
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:PromptJoinMessage(Player)
+	local NewLabel = self.OGFeedLabel:Clone()
+
+	if self.Player == Player then
+		NewLabel.Text = "<b>You</b> joined"
+	else
+		NewLabel.Text = "<b>"..Player.Name.."</b> joined"
+	end
+	
+	NewLabel.Parent = self.FeedHolder
+	
+	self.Labels += 1
+
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:PromptLeaveMessage(Player)
+	local NewLabel = self.OGFeedLabel:Clone()
+
+	if self.Player == Player then
+		self.Labels += 1
+		return self:DeleteLabel(NewLabel)
+	else
+		NewLabel.Text = "<b>"..Player.Name.."</b> left"
+	end
+	
+	NewLabel.Parent = self.FeedHolder
+	
+	self.Labels += 1
+
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:PromptDeathMessage(Victim)
+	local DeathMessage = DeathMessages[math.random(#DeathMessages)]
+	local NewLabel = self.OGFeedLabel:Clone()
+
+	if self.Player == Victim then
+		NewLabel.Text = "<b>You</b> "..DeathMessage
+	else
+		NewLabel.Text = "<font color='rgb(145, 0, 0)'>"..Victim.Name.."</font> "..DeathMessage
+	end
+
+	NewLabel.Parent = self.FeedHolder
+
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:PromptAssistMessage(Victim)
+	local NewLabel = self.OGFeedLabel:Clone()
+	
+	NewLabel.Text = "<b>You</b> assisted a kill on <font color='rgb(145, 0, 0)'>"..Victim.Name.."</font>!"
+
+	NewLabel.Parent = self.FeedHolder
+
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:PromptKillStreakMessage(Killer)
+	local NewLabel = self.OGFeedLabel:Clone()
+
+	if self.Player == Killer then
+		NewLabel.Text = "<b>You</b> are on a kill streak!"
+	else
+		NewLabel.Text = "<font color='rgb(145, 0, 0)'>"..Killer.Name.."</font> is on a kill streak!"
+	end
+
+	NewLabel.Parent = self.FeedHolder
+
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:PromptLostKillStreakMessage(Player, Kills)
+	local NewLabel = self.OGFeedLabel:Clone()
+
+	if self.Player == Player then
+		NewLabel.Text = "<b>You</b> lost your kill streak of <b>"..Kills.."</b>!"
+	else
+		NewLabel.Text = "<font color='rgb(145, 0, 0)'>"..Player.Name.."</font> lost their killstreak of <b>"..Kills.."</b>!"
+	end
+
+	NewLabel.Parent = self.FeedHolder
+
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:PromptDominationMessage(Killer, Target)
+	if self.Player ~= Killer or self.Player ~= Target then return end
+	local DominationMessage = DominationMessages[math.random(#DominationMessages)]
+	local NewLabel = self.OGFeedLabel:Clone()
+
+	if self.Player == Killer then
+		NewLabel.Text = "<b>You</b> are "..DominationMessage.." <font color='rgb(145, 0, 0)'>"..Target.Name.."</font>!"
+	else
+		NewLabel.Text = "<font color='rgb(145, 0, 0)'>"..Killer.."</font> is "..DominationMessage.." <b>you</b>!"
+	end
+
+	NewLabel.Parent = self.FeedHolder
+
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:PromptRevengeMessage(Killer, Target)
+	if self.Player ~= Killer or self.Player ~= Target then return end
+	local RevengeMessage = RevengeMessages[math.random(#RevengeMessages)]
+	local NewLabel = self.OGFeedLabel:Clone()
+	
+	if self.Player == Killer then
+		NewLabel.Text = "<b>You</b> got "..RevengeMessage.." on <font color='rgb(145, 0, 0)'>"..Target.Name.."</font>!"
+	else
+		NewLabel.Text = "<font color='rgb(145, 0, 0)'>"..Killer.."</font> got "..RevengeMessage.." on <b>you</b>!"
+	end
+
+	NewLabel.Parent = self.FeedHolder
+
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:PromptEndedKillStreakMessage(Killer, Target)
+	if self.Player ~= Killer or self.Player ~= Target then return end
+	local NewLabel = self.OGFeedLabel:Clone()
+
+	if self.Player == Killer then
+		NewLabel.Text = "<b>You</b> ended the killstreak of <font color='rgb(145, 0, 0)'>"..Target.Name.."</font>!"
+	else
+		NewLabel.Text = "<font color='rgb(145, 0, 0)'>"..Killer.."</font> ended <b>your</b> killstreak!"
+	end
+
+	NewLabel.Parent = self.FeedHolder
+	
+	self:DeleteLabel(NewLabel)
+end
+
+function FeedModule:DeleteLabel(Label, Time)
+	Time = Time or 5
+	
+	task.delay(Time, function()
+		Label:Destroy()
+		self.Labels -= 1		
+	end)
+end
+
+return FeedModule

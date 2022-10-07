@@ -1,0 +1,142 @@
+local Radial = {}
+Radial.__index = Radial
+Radial.WeaponCategories = {"Thrown", "Handguns", "MachineGuns", "AssaultRifles", "SniperRifles", "Melee", "Shotguns", "Heavy"}
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CAS = game:GetService("ContextActionService")
+local RS = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local Modules = ReplicatedStorage:WaitForChild("Modules")
+
+local CategoriesModule = require(Modules:WaitForChild("Categories"))["Categories"]
+
+local DataRemote = Remotes:WaitForChild("GetData")
+local WeaponEquip = Remotes:WaitForChild("WeaponEquip")
+
+local TAU = 2 * math.pi
+
+local function atan2Normalized(y, x)
+	local result = math.atan2(y, x)
+	return result >= 0 and result or (result + TAU)
+end
+
+local function init(self)
+	self.Camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+		self.ViewportSize = self.Camera.ViewportSize
+		if self.WheelBackwardEvent then self.WheelBackwardEvent:Disconnect() end
+		if self.WheelForwardEvent then self.WheelForwardEvent:Disconnect() end
+		if self.MouseMoveEvent then self.MouseMoveEvent:Disconnect() end
+		self:Rebuild()
+	end)
+end
+
+function Radial.new()
+	local self = {}
+	
+	self.Player = game:GetService("Players").LocalPlayer
+	self.Mouse = self.Player:GetMouse()
+	
+	self.ScreenGui = script.Parent
+	self.Origin = self.ScreenGui:WaitForChild("Middle")
+	self.Slider = self.Origin:WaitForChild("Slider")
+	self.MainSlice = script:WaitForChild("Object")
+	self.IsEquipped = false
+	
+	self.Blur = Lighting:WaitForChild("OtherEffect"):WaitForChild("Blur")
+	
+	self.PHI = math.rad(-135) - math.pi/8
+	self.Radius = self.Origin.AbsoluteSize/2
+	self.Camera = workspace.CurrentCamera
+	self.ViewportSize = self.Camera.ViewportSize
+	self.FramePos = Vector2.new(self.ViewportSize.X/2, self.ViewportSize.Y/2)
+	
+	init(self)
+	return setmetatable(self, Radial)
+end
+
+function Radial:Rebuild()
+	
+	self.FramePos = Vector2.new(self.ViewportSize.X/2, self.ViewportSize.Y/2)
+	
+	self.Origin.Visible = false
+	
+	for i, OriginChild in ipairs(self.Origin:GetChildren()) do
+		if OriginChild.Name ~= "Slider" and OriginChild:IsA("ImageLabel") or OriginChild:IsA("TextLabel") then
+			OriginChild:Destroy()
+		end
+	end
+	
+	for i = 1, 8 do
+		
+		local Slice = TAU / 8
+		local Angle = Slice * i + math.pi
+		
+		local RadialSlice = self.MainSlice:Clone()
+		RadialSlice.Name = "Part "..i
+		RadialSlice.Rotation = (i == 1) and -135 or RadialSlice.Rotation + (45 * (i - 1))
+		RadialSlice.Size += self.Origin.Size
+		RadialSlice.Position = UDim2.new(math.cos(Angle) + 0.180, 0, math.sin(Angle) + 0.008, 0)
+		RadialSlice.Parent = self.Origin
+		
+		RadialSlice:SetAttribute("Category", self.WeaponCategories[i])
+		
+		local Label = Instance.new("TextLabel")
+		local Tool = RadialSlice:GetAttribute("Default") or RadialSlice:GetAttribute("GameDefault")
+		
+		Label.Text = Tool
+		Label.Size = UDim2.new(1, 0, 1, 0)
+		
+		Label.Font = Enum.Font.Gotham
+		Label.TextColor3 = Color3.new(1, 1, 1)
+		Label.TextSize = (self.ViewportSize.X + self.ViewportSize.Y)/75
+		Label.BackgroundTransparency = 1
+		Label.Rotation = (360 - RadialSlice.AbsoluteRotation)
+		Label.Parent = RadialSlice
+	end
+	
+	local Label = Instance.new("TextLabel")
+	
+	Label.Name = "PickedTool"
+	Label.Text = ""
+	Label.Size = UDim2.new(1, 0, 1, 0)
+	Label.Font = Enum.Font.Gotham
+	Label.TextColor3 = Color3.new(1, 1, 1)
+	Label.TextSize = (self.ViewportSize.X + self.ViewportSize.Y)/75
+	Label.BackgroundTransparency = 1
+	Label.Parent = self.Origin
+	self.PickedToolLabel = Label
+end
+
+function Radial:Shuffle(Direction)
+	local Category = self.Slice:GetAttribute("Category")
+	local Default = self.Slice:GetAttribute("Default")
+	local WeaponIndex = (self.Slice:GetAttribute("WeaponIndex") == nil) and 1 or self.Slice:GetAttribute("WeaponIndex")
+	local CC = CategoriesModule[Category]
+	local SliceText = self.Slice.TextLabel
+	
+	local OwnedGun = DataRemote:InvokeServer(CC[WeaponIndex], {"Owned", "OwnedGuns"})
+	
+	if Direction == "Forward" and CC and OwnedGun then
+		
+		WeaponIndex = (WeaponIndex >= #CC) and 1 or WeaponIndex+1
+		self.Slice:SetAttribute("WeaponIndex", WeaponIndex)
+		local ToolName = CC[WeaponIndex]
+		SliceText.Text = ToolName
+		self.PickedToolLabel.Text = ToolName
+		self.Slice:SetAttribute("Default", ToolName)
+		
+	elseif Direction == "Backward" and CC and OwnedGun then
+		
+		WeaponIndex = (WeaponIndex <= 1) and #CC or WeaponIndex-1
+		self.Slice:SetAttribute("WeaponIndex", WeaponIndex)
+		local ToolName = CC[WeaponIndex]
+		SliceText.Text = ToolName
+		self.PickedToolLabel.Text = ToolName
+		self.Slice:SetAttribute("Default", ToolName)
+	end
+end
+
+return Radial

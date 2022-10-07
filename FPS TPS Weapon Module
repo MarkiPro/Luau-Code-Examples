@@ -1,0 +1,341 @@
+local WeaponHandler = {}
+WeaponHandler.__index = WeaponHandler
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local Debris = game:GetService("Debris")
+local RS = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local PlayerController = RS:WaitForChild("Modules"):WaitForChild("PlayerController")
+
+local PCValues = PlayerController:WaitForChild("Values")
+local Crouching = PCValues:WaitForChild("Crouching")
+
+local BalanceBind = RS:WaitForChild("Remotes"):WaitForChild("BalanceBind")
+
+local WeaponFunction = script:WaitForChild("WeaponFunction")
+local WeaponEvent = script:WaitForChild("WeaponEvent")
+
+local Weapons = RS:WaitForChild("Weapons")
+local Libraries = script:WaitForChild("Libraries")
+
+local ProjectileHandler = require(Libraries:WaitForChild("ProjectileHandler"))
+local MeleeHandler = require(Libraries:WaitForChild("MeleeHandler"))
+
+local WeaponsSystemGui = Libraries.Parent:WaitForChild("Assets"):WaitForChild("UI"):WaitForChild("WeaponsSystemGui")
+
+local FPS = require(script:WaitForChild("FPS"))
+local TPS = require(script:WaitForChild("TPS"))
+
+local HStates = {
+	[Enum.HumanoidStateType.Physics] = true;
+	[Enum.HumanoidStateType.Swimming] = true;
+	[Enum.HumanoidStateType.Freefall] = true;
+	[Enum.HumanoidStateType.FallingDown] = true;
+	[Enum.HumanoidStateType.Climbing] = true;
+}
+
+local CamStates = {
+	[Enum.CameraMode.LockFirstPerson] = "FPS";
+	[Enum.CameraMode.Classic] = "TPS";
+}
+
+local function init(self)
+	self.Humanoid.Died:Connect(function()
+		self.IsAlive = false
+		self:Unequip()
+	end)
+
+	self.Player:GetPropertyChangedSignal("CameraMode"):Connect(function()
+		self:Unequip(self.ShootingMode)
+		self.ShootingMode = CamStates[self.Player.CameraMode]
+		self:Equip(self.Weapon)
+	end)
+
+	Crouching:GetPropertyChangedSignal("Value"):Connect(function()
+		if not self.Weapon or not self.IsAlive or not self.Aiming then return end
+		
+		self.LastAnim:Stop()
+		self.LastAnim = Crouching.Value and self.CrouchAimAnim or self.AimAnim
+		self.LastAnim:Play()
+	end)
+end
+
+function WeaponHandler.new(Player, Character, Humanoid)
+	local self = {}
+
+	self.Player = Player
+	self.Character = Character
+	self.Humanoid = Humanoid
+
+	self.ShootingMode = CamStates[self.Player.CameraMode]
+	self.LastAnim = nil
+
+	self.IsAlive = Humanoid.Health > 0
+	self.Firing = false
+	self.CanFire = false
+	self.Reloading = false
+	self.Aiming = false
+
+	local PlayerGui = Player:WaitForChild("PlayerGui")
+	local PossibleGui = PlayerGui:FindFirstChild("WeaponsSystemGui")
+
+	self.GUI = PossibleGui and PossibleGui or WeaponsSystemGui:Clone()
+
+	if self.GUI.Parent ~= PlayerGui then
+		self.GUI.Parent = PlayerGui
+	end
+
+	self.MouseGUIParent = self.GUI:WaitForChild("MouseHoarder")
+	self.MouseGUI = self.MouseGUIParent:WaitForChild("ImageLabel")
+
+	self.Scope = self.GUI:WaitForChild("Scope")
+
+	self.FPS = FPS.new(Player, self.MouseGUIParent)
+	self.TPS = TPS.new(Player, self.MouseGUIParent)
+	self.ProjectileHandler = ProjectileHandler.new()
+
+	self.Mouse = Player:GetMouse()
+	self.Animation = script:WaitForChild("Animation")
+	self.Mouse.TargetFilter = workspace.CurrentCamera
+
+	init(self)
+	return setmetatable(self, WeaponHandler)
+end
+
+function WeaponHandler:Equip(Tool)
+	if not self.IsAlive or HStates[self.Humanoid:GetState()] or not Tool then return end
+
+	UIS.MouseIconEnabled = false
+	self.MouseGUIParent.Visible = self.ShootingMode == "FPS"
+
+	self.CanFire = true
+
+	if self.Weapon then
+		self[self.ShootingMode]:Equip(self.Weapon, self.SSettings["Client"])
+		
+		self.LastAnim = self.HoldAnim
+		self.LastAnim:Play()
+		
+		return
+	end
+
+	local WeaponModel = (type(Tool) == "string") and Weapons[Tool] or Weapons[Tool.Name]
+
+	self.Weapon = (type(Tool) == "string") and (WeaponModel:FindFirstChild(Tool)) and WeaponModel[Tool] or Tool
+	self.SSettings, self.WeaponData = WeaponFunction:InvokeServer((self.Weapon) and self.Weapon.Name or WeaponModel.Name)
+	self.LSettings = require(WeaponModel:WaitForChild("Settings"))
+	self.HoldAnim = self.Humanoid:LoadAnimation(self.LSettings["HoldAnim"])
+	self.AimAnim = self.Humanoid:LoadAnimation(self.LSettings["AimAnim"])
+	self.Ammunition = self.SSettings["Replication"]["Ammunition"]
+
+	if self.LSettings["CrouchAim"] then
+		self.CrouchAimAnim = self.Humanoid:LoadAnimation(self.LSettings["CrouchAim"])
+	end
+
+	self.LastAnim = self.HoldAnim
+	self.LastAnim:Play()
+
+	WeaponEvent:FireServer("ChangeSpeed", self.Humanoid, "Normal")
+
+	if self.SSettings["Replication"]["Mode"] ~= "Melee" then
+
+		BalanceBind:Fire("SetAmmo", self.WeaponData["Ammo"], ((self.WeaponData["MagSize"] > 0) and self.WeaponData["Mag"] or nil))
+		BalanceBind:Fire("ToggleVisibleFor", "AmmoLabel", true)
+
+		self[self.ShootingMode]:Equip(self.Weapon, self.SSettings["Client"])
+
+		self.MouseEvent = RunService.Heartbeat:Connect(function()
+			if self.Reloading then
+				self.MouseGUI.ImageColor3 = Color3.fromRGB(179, 179, 179)
+				return
+			end
+
+			self.MouseGUI.ImageColor3 = Color3.fromRGB(255, 255, 255)
+
+			if self.Mouse.Target then
+				local HitModel = self.Mouse.Target:FindFirstAncestorOfClass("Model")
+
+				if HitModel then
+					local Humanoid = HitModel:FindFirstChild("Humanoid")
+
+					if Humanoid and Humanoid.Health > 0 then
+						self.MouseGUI.ImageColor3 = Color3.fromRGB(202, 22, 22)
+					end
+				end
+			end
+		end)
+	end
+
+	if self.Player.Character:FindFirstChildWhichIsA("Model") or not self.Weapon then return end
+
+	WeaponEvent:FireServer("Setup", self.Weapon)
+	
+	self.WeaponClone = self.Player.Character:FindFirstChildWhichIsA("Model")
+	if not self.WeaponClone then
+		self.Player.Character.ChildAdded:Connect(function(Child)
+			if Child:IsA("Model") then
+				self.WeaponClone = Child
+				return
+			end
+		end)
+	end
+end
+
+function WeaponHandler:ActivateFunc()
+	if not self.IsAlive or not self.Weapon or HStates[self.Humanoid:GetState()] then return end
+	if self.WeaponData["Mag"] == 0 and self.WeaponData["MagSize"] > 0 then return end
+
+	if self.WeaponData["MagSize"] == 0 then
+		self.WeaponData["Ammo"] -= 1
+	else
+		self.WeaponData["Mag"] -= 1
+	end
+
+	BalanceBind:Fire("SetAmmo", self.WeaponData["Ammo"], ((self.WeaponData["MagSize"] > 0) and self.WeaponData["Mag"] or nil))
+
+	local FireSoundPoint = self.Character:WaitForChild(self.Weapon.Name):WaitForChild("Shoot")
+
+	local FireSound = self.LSettings["FireSound"] or nil
+	local FireSoundClone = FireSound and FireSound:Clone() or nil
+
+	local Origin = self[self.ShootingMode]:Activate(self.LSettings.CalcRecoil(), FireSoundPoint)
+
+	FireSoundClone.Parent = Origin
+	FireSoundClone:Destroy()
+	--FireSoundClone:Play()
+
+	--Debris:AddItem(FireSoundClone, self.LSettings["DELAY"])
+
+	local Direction = (self.Mouse.Hit.Position - Origin.Position).Unit
+	
+	
+	local Projectile = self.WeaponClone:FindFirstChild(self.Ammunition)
+	
+	if Projectile then
+		Projectile.Transparency = 1
+	end
+	
+	self.ProjectileHandler:Fire(self.Player, Origin.Position, Direction, false, self.Weapon.Name, self.SSettings["Replication"], FireSound)
+	
+	task.wait(60/self.SSettings["Client"]["RPM"])
+end
+
+function WeaponHandler:Activate(ToActivate)
+	if not self.IsAlive or not self.Weapon or HStates[self.Humanoid:GetState()] or self.Reloading then return end
+	if ToActivate and self.WeaponData["Mag"] == 0 and self.WeaponData["MagSize"] > 0 then self:Reload() return end
+	if self.Firing and ToActivate then return end
+	if not self.CanFire and ToActivate then return end
+
+	self.Firing = ToActivate
+
+	if not ToActivate then return end
+
+	self.LastAnim:Stop()
+	self.LastAnim = Crouching.Value and self.CrouchAimAnim or self.AimAnim
+	self.LastAnim:Play()
+
+	if self.SSettings["Replication"]["Mode"] == "Automatic" then
+		repeat
+			self.CanFire = false
+			self:ActivateFunc()
+			self.CanFire = true
+		until not self.Firing or ((self.WeaponData["MagSize"] > 0) and self.WeaponData["Mag"] == 0)
+	else
+		self.CanFire = false
+		self:ActivateFunc()
+		self.CanFire = true
+	end
+
+	if not self.Aiming then
+		self.LastAnim:Stop()
+		self.LastAnim = self.HoldAnim
+		self.LastAnim:Play()
+
+		if self.ShootingMode == "TPS" then
+			self.MouseGUIParent.Visible = false
+		end
+	end
+
+	if self.WeaponData["Mag"] == 0 and self.WeaponData["MagSize"] > 0 then
+		self.Firing = false
+	end
+end
+
+function WeaponHandler:Reload()
+	if not self.IsAlive or not self.Weapon or self.Reloading or self.WeaponData["Ammo"] == 0 or self.WeaponData["Mag"] == self.WeaponData["MagSize"] or self.WeaponData["MagSize"] == 0 or HStates[self.Humanoid:GetState()] then return end
+	--self[self.ShootingMode]:Reload()
+	if self.Firing then self:Activate(false) end
+	if self.Aiming then self:Aim(false) end
+
+	self.Reloading = true
+
+	local ToReload = self.WeaponData["MagSize"] - self.WeaponData["Mag"]
+
+	local Reload = math.clamp(ToReload, 0, self.WeaponData["Ammo"])
+
+	WeaponEvent:FireServer("Reload", self.Weapon.Name)
+
+	self.MouseGUI.ImageColor3 = Color3.fromRGB(179, 179, 179)
+	task.wait(self.SSettings["Client"]["ReloadTime"])
+	self.MouseGUI.ImageColor3 = Color3.fromRGB(255, 255, 255)
+	
+	local Projectile = self.WeaponClone:FindFirstChild(self.Ammunition)
+	
+	if Projectile and Projectile.Transparency == 1 then
+		Projectile.Transparency = 0
+	end
+	
+	if self.Reloading then
+		self.WeaponData["Ammo"] -= Reload
+		self.WeaponData["Mag"] += Reload
+	else return end
+
+	self.Reloading = false
+
+	BalanceBind:Fire("SetAmmo", self.WeaponData["Ammo"], ((self.WeaponData["MagSize"] > 0) and self.WeaponData["Mag"] or nil))
+end
+
+function WeaponHandler:Aim(State)
+	if not self.IsAlive or not self.Weapon or not self.SSettings["Client"]["CanAim"] or HStates[self.Humanoid:GetState()] or self.Reloading then return end
+
+	local Scope = self.SSettings["Client"]["Scope"]
+
+	self.Scope.Visible = Scope and State or false
+
+	self.Aiming = State
+	self.LastAnim:Stop()
+	self.LastAnim = State and ((Crouching.Value == true) and self.CrouchAimAnim or self.AimAnim) or self.HoldAnim
+	self.LastAnim:Play()
+
+	self[self.ShootingMode]:Aim(State, Scope)
+end
+
+function WeaponHandler:Unequip(Mode)
+	self:Aim(false)
+	self.CanFire = false
+	self.Reloading = false
+	
+	if self.LastAnim then self.LastAnim:Stop() end
+
+	if Mode then
+		return self[Mode]:Unequip()
+	else
+		self.Weapon = nil
+		WeaponEvent:FireServer("Cleanup")
+		self["FPS"]:Unequip()
+		self["TPS"]:Unequip()
+	end
+	
+	self.SSettings = nil
+	self.LSettings = nil
+	if self.MouseEvent then self.MouseEvent:Disconnect() self.MouseGUI.ImageColor3 = Color3.fromRGB(255, 255, 255) end
+	UIS.MouseIconEnabled = true
+	self.MouseGUIParent.Visible = false
+
+	WeaponEvent:FireServer("ChangeSpeed", self.Humanoid, "Normal")
+	BalanceBind:Fire("ToggleVisibleFor", "AmmoLabel", false)
+end
+
+return WeaponHandler
